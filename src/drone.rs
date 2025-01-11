@@ -11,7 +11,10 @@ use wg_2024::packet::NackType::{Dropped, ErrorInRouting, UnexpectedRecipient};
 #[macro_export]
 macro_rules! log {
     ($($arg:tt)*) => {{
+        #[cfg(feature = "log")]
         println!($($arg)*);
+        #[cfg(not(feature = "log"))]
+        let _ = format!($($arg)*);
     }};
 }
 
