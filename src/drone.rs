@@ -94,8 +94,9 @@ impl wg_2024::drone::Drone for Drone {
     }
 }
 impl Drone {
-    fn log<S: AsRef<str>>(&self, message: S) {
-        println!("LeDron ID {} - {}", self.id, message.as_ref());
+    fn log<S: AsRef<str>>(&self, _message: S) {
+        #[cfg(feature = "log")]
+        println!("LeDron ID {} - {}", self.id, _message.as_ref());
     }
     fn drone_behaviour(&mut self, packet: Packet) {
         if self.cache.crashed {
@@ -139,7 +140,7 @@ impl Drone {
                             let _ = self.sendto_controller(packet.clone(), false); // We send the packet to Sim.Controller
                             self.send_packet(Self::build_packet_nack(packet.clone(), Dropped, Some(fragment_id.fragment_index)), None);
                         } else {
-                            // println!("Drone ID {} - NOT dropping packet...", self.id);
+                            // log!("Drone ID {} - NOT dropping packet...", self.id);
                             return_packet = self.update_packet_to_forward(packet);
                             self.send_packet(return_packet.clone(), None);
                         }
@@ -337,7 +338,7 @@ impl Drone {
                 old_srh = old_srh.sub_route(0..=old_srh.hop_index).unwrap();
                 old_srh.reverse();
                 old_srh.hop_index = 1;
-                //println!("Building Nack [{:?}]...", nack_id);
+                //log!("Building Nack [{:?}]...", nack_id);
                 old_srh
             },
             pack_type: PacketType::Nack(Nack {
