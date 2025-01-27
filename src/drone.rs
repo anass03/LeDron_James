@@ -41,8 +41,8 @@ struct Cache {
 
 /// Last Update: 27/01/25, Status: No known issue atm
 pub struct Drone {
-    pub id: NodeId,
-    pub pdr: f32, 
+    pub id: NodeId, // u8
+    pub pdr: f32, // I think it's Network Initializer stuff
     pub packet_send: HashMap<NodeId, Sender<Packet>>, // Neighbor ID to Sender mapping
     pub packet_recv: Receiver<Packet>, // Receive Packets from Neighbors
     pub controller_send: Sender<DroneEvent>,       // Send Events to Sim. Controller
@@ -88,7 +88,7 @@ impl wg_2024::drone::Drone for Drone {
                     if let Ok(packet) = packet{
                         self.drone_behaviour(packet);
                     }else{
-                        // It means that channel has been closed -> We gotta shut off drone run method
+                        // It means that channel has been closed -> We gotta shut off drone run metho
                         return;
                     }
                 }
@@ -98,6 +98,7 @@ impl wg_2024::drone::Drone for Drone {
 }
 impl Drone {
     fn log<S: AsRef<str>>(&self, message: S) {
+        #[cfg(feature = "log")]
         if self.cache.logging_enabled {
             println!("LeDron ID {} - {}", self.id, message.as_ref());
         }
