@@ -36,11 +36,13 @@ pub enum RoutingCodes { // For performance and logic enhancements
 struct Cache {
     history_floodreq: HashMap<NodeId, Vec<u64>>,
     crashed: bool,
+    logging_enabled: bool,
 }
 
+/// Last Update: 27/01/25, Status: No known issue atm
 pub struct Drone {
-    pub id: NodeId, // u8
-    pub pdr: f32, // I think it's Network Initializer stuff
+    pub id: NodeId,
+    pub pdr: f32, 
     pub packet_send: HashMap<NodeId, Sender<Packet>>, // Neighbor ID to Sender mapping
     pub packet_recv: Receiver<Packet>, // Receive Packets from Neighbors
     pub controller_send: Sender<DroneEvent>,       // Send Events to Sim. Controller
@@ -67,6 +69,7 @@ impl wg_2024::drone::Drone for Drone {
             cache: Cache {
                 history_floodreq: HashMap::new(),
                 crashed: false,
+                logging_enabled: true,
             },
         }
     }
@@ -85,7 +88,7 @@ impl wg_2024::drone::Drone for Drone {
                     if let Ok(packet) = packet{
                         self.drone_behaviour(packet);
                     }else{
-                        // It means that channel has been closed -> We gotta shut off drone run metho
+                        // It means that channel has been closed -> We gotta shut off drone run method
                         return;
                     }
                 }
@@ -95,21 +98,23 @@ impl wg_2024::drone::Drone for Drone {
 }
 impl Drone {
     fn log<S: AsRef<str>>(&self, message: S) {
-        println!("LeDron ID {} - {}", self.id, message.as_ref());
+        if self.cache.logging_enabled {
+            println!("LeDron ID {} - {}", self.id, message.as_ref());
+        }
+    }
+    pub fn logging_enabled(&mut self, log:bool){ // Self-Explanatory
+        self.cache.logging_enabled = log
     }
     fn drone_behaviour(&mut self, packet: Packet) {
         if self.cache.crashed {
-            // We gotta empty the queue
-            // Only Ack, Nack, FloodResponse already sent
-            // before the drone-crash will be forwarded
-            // during a crashing status.
+            // We gotta empty the queue, only Ack, Nack, FloodResponse already sent
+            // before the drone-crash will be forwarded during a crashing status.
             match packet.clone().pack_type {
                 PacketType::Nack(_) |
                 PacketType::Ack(_) |
                 PacketType::FloodResponse(_) => {
                     self.handle_packet(packet);
                 }
-                // This the case of Flood Request / Fragment message:
                 PacketType::FloodRequest(_) => {
                     self.log("Dropping packet...");
                     self.send_packet(Self::build_packet_nack(packet, ErrorInRouting(self.id), None), None);
@@ -127,7 +132,7 @@ impl Drone {
         self.log("Handling packet...");
         match self.handle_routing_header(&packet.routing_header) {
             RoutingCodes::Correct => {
-                let mut return_packet: Packet;
+                let return_packet: Packet;
                 match packet.pack_type.clone() {
                     PacketType::MsgFragment(fragment_id) => {
                         self.log("Handling fragment...");
@@ -155,7 +160,8 @@ impl Drone {
                 }
             }
             RoutingCodes::DestinationArrived => {
-                // Check if it's an FloodingReq, if not, build an Nack, a Drone can't receive messages!
+                // Check if it's an FloodingReq, as handle_routing_header doesn't check it.
+                // If not, build an Nack, a Drone can't receive messages!
                 self.log("Packet with Drone destination arrived...");
                 match packet.pack_type.clone() {
                     PacketType::FloodRequest(packet_id) => {
@@ -197,13 +203,8 @@ impl Drone {
         self.log("Handling commands...");
         match command {
             DroneCommand::Crash => {
-                if self.cache.crashed {
-                    self.cache.crashed = false;
-                    self.log("Uncrashed the drone, restore manually the connections to revive!")
-                } else {
-                    self.cache.crashed = true;
-                    self.log("Crashed the drone, Simulation Controller deleting the connection!");
-                }
+                self.cache.crashed = true;
+                self.log("Crashed the drone, Simulation Controller deleting the connection!");
             }
             DroneCommand::SetPacketDropRate(newpdr) => {
                 self.pdr = newpdr;
@@ -247,45 +248,51 @@ impl Drone {
         if let Some(floods_sent) = self.cache.history_floodreq.get_mut(&packet_id.initiator_id) {
             if floods_sent.contains(&packet_id.flood_id) {
                 // Already received this FloodReq, we need to build a FloodResponse
-                packet_id.path_trace.push((self.id.clone(), NodeType::Drone)); // We add our ID to the path
+                packet_id.path_trace.push((self.id.clone(), NodeType::Drone));
                 self.send_packet(Self::build_packet_flood_response(packet_id, packet.session_id), None);
             } else {
-                let packetreceivedfrom = packet_id.path_trace.get(packet_id.path_trace.len() - 1usize)
-                    .expect(("LeDron ID ".to_string() + self.id.to_string().as_str() + " - Received Flood Request with empty path-trace!").as_str()).clone();
-                floods_sent.push(packet_id.flood_id.clone()); // **
-                let return_packet = Packet {
-                    session_id: packet.session_id,
-                    routing_header: packet.routing_header,
-                    pack_type: {
-                        let mut return_packet_typefield = packet_id.clone();
-                        return_packet_typefield.path_trace.push((self.id.clone(), NodeType::Drone)); // We adding our ID to the path trace
-                        PacketType::FloodRequest(return_packet_typefield)
-                    },
-                };
-                // We send the packet to all the neighbours beside the one we received the packet from
-                for i in &mut self.packet_send.clone() {
-                    if *i.0 != packetreceivedfrom.0 {
-                        self.send_packet(return_packet.clone(), Some(i.1));
+                match packet_id.path_trace.get(packet_id.path_trace.len() - 1usize){
+                    None => { self.log( "Received Flood Request with empty path-trace! Throwing packet away.") },
+                    Some(packetreceivedfrom) =>{
+                        floods_sent.push(packet_id.flood_id.clone()); // **
+                        let return_packet = Packet {
+                            session_id: packet.session_id,
+                            routing_header: packet.routing_header,
+                            pack_type: {
+                                let mut return_packet_typefield = packet_id.clone();
+                                return_packet_typefield.path_trace.push((self.id.clone(), NodeType::Drone)); // We adding our ID to the path trace
+                                PacketType::FloodRequest(return_packet_typefield)
+                            },
+                        };
+                        // We send the packet to all the neighbours beside the one we received the packet from
+                        for i in &mut self.packet_send.clone() {
+                            if *i.0 != packetreceivedfrom.0 {
+                                self.send_packet(return_packet.clone(), Some(i.1));
+                            }
+                        }
                     }
                 }
             }
         } else {
-            let packetreceivedfrom = packet_id.path_trace.get(packet_id.path_trace.len() - 1usize)
-                .expect(("LeDron ID ".to_string() + self.id.to_string().as_str() + " - Received Flood Request with empty path-trace!").as_str()).clone();
-            self.cache.history_floodreq.insert(packet_id.initiator_id.clone(), vec![packet_id.flood_id.clone()]); // **
-            let return_packet = Packet {
-                session_id: packet.session_id,
-                routing_header: packet.routing_header,
-                pack_type: {
-                    let mut return_packet_typefield = packet_id.clone();
-                    return_packet_typefield.path_trace.push((self.id.clone(), NodeType::Drone)); // We adding our ID to the path trace
-                    PacketType::FloodRequest(return_packet_typefield)
-                },
-            };
-            // We send the packet to all the neighbours beside the one we received the packet from
-            for i in &mut self.packet_send.clone() {
-                if *i.0 != packetreceivedfrom.0 {
-                    self.send_packet(return_packet.clone(), Some(i.1));
+            match packet_id.path_trace.get(packet_id.path_trace.len() - 1usize) {
+                None => {self.log( "Received Flood Request with empty path-trace! Throwing packet away.")},
+                Some(packetreceivedfrom) =>{
+                    self.cache.history_floodreq.insert(packet_id.initiator_id.clone(), vec![packet_id.flood_id.clone()]); // **
+                    let return_packet = Packet {
+                        session_id: packet.session_id,
+                        routing_header: packet.routing_header,
+                        pack_type: {
+                            let mut return_packet_typefield = packet_id.clone();
+                            return_packet_typefield.path_trace.push((self.id.clone(), NodeType::Drone)); // We adding our ID to the path trace
+                            PacketType::FloodRequest(return_packet_typefield)
+                        },
+                    };
+                    // We send the packet to all the neighbours beside the one we received the packet from
+                    for i in &mut self.packet_send.clone() {
+                        if *i.0 != packetreceivedfrom.0 {
+                            self.send_packet(return_packet.clone(), Some(i.1));
+                        }
+                    }
                 }
             }
         }
@@ -390,10 +397,8 @@ impl Drone {
             }
         }
     }
-
     // Every time we send / drop a packet we send an ack to the Simulation Controller,
-    // as its implementation it's not specified correctly, we suppose it's up to each
-    // group.
+    // as its implementation it's not specified correctly, we suppose it's up to each group.
     fn sendto_controller(&self, packet: Packet, sent: bool) -> Result<(), String> {
         self.log("Sending to controller...");
         if sent {
