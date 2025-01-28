@@ -16,7 +16,11 @@ Add this dependency to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-LeDron_James = { git = "https://github.com/anass03/LeDron_James.git" }
+LeDron_James = { git = "https://github.com/anass03/LeDron_James.git", features = ["log"] }
+
+[features]
+log = []
+default = ["log"]
 ```
 ## License
 
