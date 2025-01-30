@@ -212,8 +212,8 @@ impl Drone {
             }
             DroneCommand::AddSender(nodeid, senderchannel) => {
                 match self.packet_send.insert(nodeid, senderchannel) {
-                    Some(_) => { self.log(format!("Added Node {} to sender channel", nodeid)); }
-                    None => { self.log(format!("Failed to add Node {} to sender channel", nodeid)); }
+                    Some(_) => { self.log(format!("Re-Added Node {} to sender channel!", nodeid)); }
+                    None => { self.log(format!("Added Node {} to sender channel!", nodeid)); }
                 }
             }
             DroneCommand::RemoveSender(nodeid) => {
