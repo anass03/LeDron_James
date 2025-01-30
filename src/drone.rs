@@ -39,7 +39,7 @@ struct Cache {
     logging_enabled: bool,
 }
 
-/// Last Update: 27/01/25, Status: No known issue atm
+/// Last Update: 30/01/25, Status: No known issue atm
 pub struct Drone {
     pub id: NodeId, // u8
     pub pdr: f32, // I think it's Network Initializer stuff
@@ -212,8 +212,8 @@ impl Drone {
             }
             DroneCommand::AddSender(nodeid, senderchannel) => {
                 match self.packet_send.insert(nodeid, senderchannel) {
-                    Some(_) => { self.log("Added sender channel"); }
-                    None => { self.log("Failed to add sender channel"); }
+                    Some(_) => { self.log(format!("Added Node {} to sender channel", nodeid)); }
+                    None => { self.log(format!("Failed to add Node {} to sender channel", nodeid)); }
                 }
             }
             DroneCommand::RemoveSender(nodeid) => {
