@@ -8,7 +8,7 @@ use wg_2024::controller::DroneEvent::{PacketSent, PacketDropped};
 use wg_2024::network::*;
 use wg_2024::packet::NackType::{Dropped, ErrorInRouting, UnexpectedRecipient};
 
-pub enum SendingCodes { // For performance and logic enhancements
+enum SendingCodes { // For performance and logic enhancements
     SuccessfullySent(u64),
     ErrorSending(String),
     NoNextHop(String),
@@ -27,7 +27,8 @@ impl Display for SendingCodes {
         Debug::fmt(self, f)
     }
 }
-pub enum RoutingCodes { // For performance and logic enhancements
+
+enum RoutingCodes { // For performance and logic enhancements
     Correct,
     DestinationArrived, // Could be a FloodRequest
     HopsMismatch,
@@ -39,15 +40,15 @@ struct Cache {
     logging_enabled: bool,
 }
 
-/// Last Update: 30/01/25, Status: No known issue atm
+/// Last Update: 06/02/25, Status: No known issue atm
 pub struct Drone {
-    pub id: NodeId, // u8
-    pub pdr: f32, // I think it's Network Initializer stuff
+    pub id: NodeId,
+    pub pdr: f32,
     pub packet_send: HashMap<NodeId, Sender<Packet>>, // Neighbor ID to Sender mapping
     pub packet_recv: Receiver<Packet>, // Receive Packets from Neighbors
     pub controller_send: Sender<DroneEvent>,       // Send Events to Sim. Controller
     pub controller_recv: Receiver<DroneCommand>,  // Receive from Sim. Controller
-    cache: Cache, // We memorize the Flood Requests and crashings
+    cache: Cache, // Drone storing data mechanism
 }
 
 impl wg_2024::drone::Drone for Drone {
@@ -88,7 +89,7 @@ impl wg_2024::drone::Drone for Drone {
                     if let Ok(packet) = packet{
                         self.drone_behaviour(packet);
                     }else{
-                        // It means that channel has been closed -> We gotta shut off drone run metho
+                        // It means that channel has been closed -> We gotta shut off drone run method
                         return;
                     }
                 }
@@ -177,7 +178,7 @@ impl Drone {
                 match packet.pack_type.clone() { // If the packet is of Fragment type we have to indicate the index number too.
                     PacketType::MsgFragment(fragment_id) => {
                         if packet.routing_header.valid_hop_index() {
-                            self.send_packet(Self::build_packet_nack(packet.clone(), ErrorInRouting(packet.routing_header.hops[packet.routing_header.hop_index]), Some(fragment_id.fragment_index)), None);
+                            self.send_packet(Self::build_packet_nack(packet.clone(), UnexpectedRecipient(packet.routing_header.hops[packet.routing_header.hop_index]), Some(fragment_id.fragment_index)), None);
                         } else {
                             // SRH Received is not valid, I can't send back a Nack as I might have to guess where it did come from, fuck the drone before :(
                             self.log(format!("Discarding packet [SESSION ID: {:?}] because it has an unknown SRH (OUB)", packet.session_id));
@@ -189,7 +190,7 @@ impl Drone {
                     }
                     _ => {
                         if packet.routing_header.valid_hop_index() {
-                            self.send_packet(Self::build_packet_nack(packet.clone(), ErrorInRouting(packet.routing_header.hops[packet.routing_header.hop_index]), None), None);
+                            self.send_packet(Self::build_packet_nack(packet.clone(), UnexpectedRecipient(packet.routing_header.hops[packet.routing_header.hop_index]), None), None);
                         } else {
                             // SRH Received is not valid, I can't send back a Nack as I might have to guess where it did come from, fuck the drone before :(
                             self.log(format!("Discarding packet [SESSION ID: {:?}] because it has an unknown SRH (OUB)", packet.session_id));
@@ -254,7 +255,7 @@ impl Drone {
             } else {
                 match packet_id.path_trace.get(packet_id.path_trace.len() - 1usize){
                     None => { self.log( "Received Flood Request with empty path-trace! Throwing packet away.") },
-                    Some(packetreceivedfrom) =>{
+                    Some(packetreceivedfrom) => {
                         floods_sent.push(packet_id.flood_id.clone()); // **
                         let return_packet = Packet {
                             session_id: packet.session_id,
@@ -309,31 +310,45 @@ impl Drone {
             packet.routing_header.hop_index += 1;
             packet
         } else {
-            // Genero un nack e lo rimando dove è tornato
-            let mut opt: Option<u64> = None;
-            match &packet.pack_type {
-                PacketType::MsgFragment(fragm) => opt = Some(fragm.fragment_index),
-                _ => ()
+            // Genero un nack e lo rimando dove è tornato se è un MsgFragment
+            match packet.clone().pack_type{
+                PacketType::MsgFragment(fragm) => {
+                    Self::build_packet_nack(packet, ErrorInRouting(nexthop), Some(fragm.fragment_index))
+                },
+                _ => {
+                    packet.routing_header.hop_index += 1;
+                    packet
+                },
             }
-            Self::build_packet_nack(packet, ErrorInRouting(nexthop), opt)
         }
     }
     fn build_packet_flood_response(flreq_header: FloodRequest, srcid: u64) -> Packet {
         let return_packet: Packet = Packet {
-            routing_header: SourceRoutingHeader {
-                // Hop Index 1,
-                hop_index: 1,
-                hops: {
-                    flreq_header.path_trace.iter().cloned().rev().map(|(id, _)| id).collect()
-                },
-            },
             pack_type: {
                 PacketType::FloodResponse(FloodResponse {
                     flood_id: flreq_header.flood_id,
-                    path_trace: flreq_header.path_trace,
+                    path_trace: flreq_header.path_trace.clone(),
                 })
             },
+            routing_header: SourceRoutingHeader {
+                // Hop Index 1,
+                hops: {
+                    let mut ret:Vec<NodeId>;
+                    ret = flreq_header.path_trace.iter().cloned().rev().map(|(id, _)| id).collect();
+                    match ret.last(){
+                        Some(ndid) => {
+                            if !ndid.eq(&flreq_header.initiator_id){
+                                ret.push(flreq_header.initiator_id.clone());
+                            }
+                        },
+                        _ => (),
+                    }
+                    ret
+                },
+                hop_index: 1,
+            },
             session_id: srcid, // random number or session id from the old packet?,
+
         };
         return_packet
     }
@@ -391,7 +406,7 @@ impl Drone {
                     }
                     None => {
                         self.log("Neighbour not found...");
-                        let _ = self.sendto_controller(packet, true); // We send the packet to Sim.Controller
+                        let _ = self.sendto_controller(packet, false); // We send the packet to Sim.Controller
                         SendingCodes::NoNextHop("Neighbour not found".to_string())
                     }
                 }
